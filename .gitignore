@@ -9,6 +9,9 @@ Logs/
 firmware_process_log.csv
 *.csv
 
+# Local Preview Images
+preview_single_mode.png
+
 # Python Cache & Virtual Environments
 __pycache__/
 *.pyc

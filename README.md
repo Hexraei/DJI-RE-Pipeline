@@ -2,6 +2,9 @@
 
 A robust, fully automated Python pipeline and GUI engine designed for the ingestion, extraction, decryption, structured organization, and comprehensive logging of DJI drone firmware containers.
 
+![GUI Preview Single File Processing Mode](preview_single_mode.png)
+*Real-time inspection dashboard and process logging interface in Single File Processing Mode.*
+
 ---
 
 ## Capabilities
