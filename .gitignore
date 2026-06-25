@@ -1,0 +1,25 @@
+# DJI RE Pipeline - Git Ignore Specifications
+
+# Firmware Storage & Binaries
+Firmwares/
+temp_extract/
+
+# Local Process Logs
+Logs/
+firmware_process_log.csv
+*.csv
+
+# Python Cache & Virtual Environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+env/
+.env
+
+# OS Generated Files
+.DS_Store
+Thumbs.db

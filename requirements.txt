@@ -1,0 +1,3 @@
+#dji_firmware_pipeline - requirements
+pycryptodome>=3.18.0
+
