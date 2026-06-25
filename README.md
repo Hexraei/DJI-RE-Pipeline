@@ -34,6 +34,10 @@ DJI-RE-Pipeline/
 ### Attribution & Citation
 The standalone utilities housed within the `tools/` directory (`dji_xv4_fwcon.py` and `dji_imah_fwsig.py`) are originally authored by and sourced from the open-source **[dji-firmware-tools](https://github.com/o-gs/dji-firmware-tools)** repository by **o-gs**. Full attribution is given to the original repository maintainers for their foundational research in DJI firmware structure and cryptographic wrapping.
 
+### Key Management & Decryption Notice (June 2026)
+> [!IMPORTANT]
+> This pipeline and its embedded standalone tools were officially packaged in **June 2026**. The underlying decryption utilities (`tools/dji_imah_fwsig.py`) house only the known cryptographic keys available up to this date. For future DJI firmware releases or newly introduced encryption wrappers, users must independently acquire and verify new decryption keys, or update the standalone tool scripts directly from the upstream repository.
+
 ---
 
 ## Dependencies
