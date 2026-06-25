@@ -3,8 +3,7 @@
 
 """
 DJI Firmware Automated Extraction & Decryption Pipeline
-A robust Tkinter GUI application designed to automate the ingestion, extraction,
-decryption, folder organization, and CSV logging of firmware containers downloaded from DDD.
+A Tkinter GUI application designed to automate the extraction, decryption, and logging of firmware(s).
 """
 
 import os
@@ -19,7 +18,8 @@ import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-# Master Dynamic Paths definition
+# === MASTER DYNAMIC PATHS & CONSTANTS ===
+
 PROJECT_DIR = os.path.abspath(os.path.dirname(__file__))
 WORKSPACE_ROOT = os.path.abspath(os.path.join(PROJECT_DIR, "..", ".."))
 TOOLS_DIR = os.path.join(PROJECT_DIR, "tools")
@@ -46,6 +46,8 @@ for d in [RAW_STORE, EXTRACTED_STORE, DECRYPTED_STORE, TOOLS_DIR, LOGS_DIR, SING
     os.makedirs(d, exist_ok=True)
 
 
+# === BASE HELPER FUNCTIONS ===
+
 def _to_relative_path(abs_path):
     """Converts absolute path to clean /Firmwares/... relative path string."""
     try:
@@ -56,6 +58,8 @@ def _to_relative_path(abs_path):
     except Exception:
         return abs_path
 
+
+# === MASTER GUI APPLICATION CLASS ===
 
 class FirmwarePipelineApp(tk.Tk):
     def __init__(self):
@@ -143,7 +147,7 @@ class FirmwarePipelineApp(tk.Tk):
 
             # Clear Single View
             self.single_session_data = {'model': '', 'dest': '', 'types': {}, 'rows': []}
-            self._update_single_banner()
+            self._update_banner(self.s_archive_lbl, self.s_model_lbl, self.s_dest_lbl, self.s_type_lbl, 'N/A', '', '', {})
             for item in self.single_tree.get_children():
                 self.single_tree.delete(item)
             self.single_log_box.delete(1.0, tk.END)
@@ -155,15 +159,17 @@ class FirmwarePipelineApp(tk.Tk):
             self.bulk_current_index = 0
             self.bulk_combo['values'] = []
             self.bulk_combo.set('')
-            self._update_bulk_banner(None)
+            self._update_bulk_banner_from_session(None)
             for item in self.bulk_tree.get_children():
                 self.bulk_tree.delete(item)
             self.bulk_log_box.delete(1.0, tk.END)
             self.bulk_status_var.set("Status: Idle")
 
-            self._lock_single_gui(False)
-            self._lock_bulk_gui(False)
+            self._lock_gui(is_bulk=False, lock=False)
+            self._lock_gui(is_bulk=True, lock=False)
             self.show_screen('home')
+
+    # === UI BUILDER MODULES ===
 
     def _build_home_screen(self):
         box = ttk.Frame(self.home_frame)
@@ -184,35 +190,104 @@ class FirmwarePipelineApp(tk.Tk):
         bulk_btn = ttk.Button(btn_frame, text="Bulk Folder Processing", style='Home.TButton', command=lambda: self.show_screen('bulk'))
         bulk_btn.pack(side=tk.RIGHT, expand=True, padx=10, fill=tk.X)
 
-    def _build_single_screen(self):
-        # Top Header & Go Back & Status Display
-        header_frame = ttk.Frame(self.single_frame)
+    def _create_header(self, parent_frame, title_text):
+        header_frame = ttk.Frame(parent_frame)
         header_frame.pack(fill=tk.X, pady=(0, 15))
 
         back_btn = ttk.Button(header_frame, text="< Go Back", command=self._go_back)
         back_btn.pack(side=tk.LEFT)
 
-        title_label = ttk.Label(header_frame, text="Single File Processing Mode", style='Header.TLabel')
+        title_label = ttk.Label(header_frame, text=title_text, style='Header.TLabel')
         title_label.pack(side=tk.LEFT, padx=(15, 0))
 
-        self.single_status_var = tk.StringVar(value="Status: Idle")
-        status_label = ttk.Label(header_frame, textvariable=self.single_status_var, font=('Helvetica', 11, 'bold', 'italic'), foreground='#7F8C8D')
+        status_var = tk.StringVar(value="Status: Idle")
+        status_label = ttk.Label(header_frame, textvariable=status_var, font=('Helvetica', 11, 'bold', 'italic'), foreground='#7F8C8D')
         status_label.pack(side=tk.RIGHT, padx=(0, 10))
+        return status_var
 
-        # Input Frame (Label above Entry, Execute aligned beneath)
-        input_frame = ttk.Frame(self.single_frame)
+    def _create_input_panel(self, parent_frame, label_text, path_var, browse_text, browse_cmd, exec_text, exec_cmd):
+        input_frame = ttk.Frame(parent_frame)
         input_frame.pack(fill=tk.X, pady=(0, 15))
 
-        ttk.Label(input_frame, text="Select Firmware Container (tar/bin):").grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
-        ttk.Entry(input_frame, textvariable=self.single_file_path, width=70).grid(row=1, column=0, sticky=tk.EW, pady=(0, 10), padx=(0, 10))
-        ttk.Button(input_frame, text="Browse File", command=self._browse_single).grid(row=1, column=1, sticky=tk.W, pady=(0, 10))
+        ttk.Label(input_frame, text=label_text).grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
+        ttk.Entry(input_frame, textvariable=path_var, width=70).grid(row=1, column=0, sticky=tk.EW, pady=(0, 10), padx=(0, 10))
+        ttk.Button(input_frame, text=browse_text, command=browse_cmd).grid(row=1, column=1, sticky=tk.W, pady=(0, 10))
         
-        self.single_exec_btn = ttk.Button(input_frame, text="Execute Pipeline", command=self._run_single_pipeline)
-        self.single_exec_btn.grid(row=2, column=0, sticky=tk.W, pady=(5, 10))
-
+        exec_btn = ttk.Button(input_frame, text=exec_text, command=exec_cmd)
+        exec_btn.grid(row=2, column=0, sticky=tk.W, pady=(5, 10))
         input_frame.columnconfigure(0, weight=1)
+        return exec_btn
 
-        # Master Content Split Frame (Left: Info + Dashboard, Right: Logs)
+    def _create_banner_box(self, parent_frame, tooltip_source_func):
+        banner_frame = ttk.Frame(parent_frame, padding=8, relief=tk.SOLID, borderwidth=1)
+        banner_frame.pack(fill=tk.X, pady=(0, 15))
+
+        archive_lbl = ttk.Label(banner_frame, text="Source Archive: N/A", style='Banner.TLabel')
+        archive_lbl.grid(row=0, column=0, sticky=tk.W, pady=1)
+
+        model_lbl = ttk.Label(banner_frame, text="Model Name: N/A", style='Banner.TLabel')
+        model_lbl.grid(row=1, column=0, sticky=tk.W, pady=1)
+
+        dest_lbl = ttk.Label(banner_frame, text="Storage Destination: N/A", style='Banner.TLabel')
+        dest_lbl.grid(row=2, column=0, sticky=tk.W, pady=1)
+
+        type_lbl = ttk.Label(banner_frame, text="File Type(s): N/A", style='Banner.TLabel', foreground='#2980B9')
+        type_lbl.grid(row=3, column=0, sticky=tk.W, pady=1)
+
+        type_lbl.bind("<Enter>", lambda e: self._show_tooltip(e, tooltip_source_func()))
+        type_lbl.bind("<Leave>", self._hide_tooltip)
+        return archive_lbl, model_lbl, dest_lbl, type_lbl
+
+    def _create_dashboard_table(self, parent_frame, clear_cmd):
+        tree_frame = ttk.Frame(parent_frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+
+        tree_btn_frame = ttk.Frame(tree_frame)
+        tree_btn_frame.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(tree_btn_frame, text="Dashboard", style='Header.TLabel').pack(side=tk.LEFT)
+        ttk.Button(tree_btn_frame, text="Clear", style='Clear.TButton', command=clear_cmd).pack(side=tk.RIGHT)
+
+        tree_scroll_y = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL)
+        tree_scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+
+        tree = ttk.Treeview(tree_frame, columns=("module", "status"), show="headings", yscrollcommand=tree_scroll_y.set)
+        tree_scroll_y.config(command=tree.yview)
+
+        tree.heading("module", text="Module ID")
+        tree.heading("status", text="Decryption Status")
+        tree.column("module", width=180, anchor=tk.CENTER)
+        tree.column("status", width=220, anchor=tk.CENTER)
+        tree.pack(fill=tk.BOTH, expand=True)
+        return tree
+
+    def _create_logs_panel(self, parent_frame, clear_cmd):
+        log_frame = ttk.Frame(parent_frame)
+        log_frame.pack(fill=tk.BOTH, expand=True)
+
+        log_btn_frame = ttk.Frame(log_frame)
+        log_btn_frame.pack(fill=tk.X, expand=False, pady=(0, 5))
+        ttk.Label(log_btn_frame, text="Logs", style='Header.TLabel').pack(side=tk.LEFT)
+        ttk.Button(log_btn_frame, text="Clear", style='Clear.TButton', command=clear_cmd).pack(side=tk.RIGHT)
+
+        log_text_container = ttk.Frame(log_frame)
+        log_text_container.pack(fill=tk.BOTH, expand=True)
+
+        log_box = tk.Text(log_text_container, wrap=tk.WORD, font=('Consolas', 9), background='#FAFAFA')
+        log_scroll = ttk.Scrollbar(log_text_container, orient=tk.VERTICAL, command=log_box.yview)
+        log_box.config(yscrollcommand=log_scroll.set)
+        
+        log_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        log_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        return log_box
+
+    def _build_single_screen(self):
+        self.single_status_var = self._create_header(self.single_frame, "Single File Processing Mode")
+        self.single_exec_btn = self._create_input_panel(
+            self.single_frame, "Select Firmware Container (tar/bin):", self.single_file_path,
+            "Browse File", lambda: self._browse(self.single_file_path, "Select DJI Firmware Container", is_dir=False),
+            "Execute Pipeline", self._run_single_pipeline
+        )
+
         main_content = ttk.Frame(self.single_frame)
         main_content.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
 
@@ -222,96 +297,25 @@ class FirmwarePipelineApp(tk.Tk):
         right_panel = ttk.Frame(main_content)
         right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(10, 0))
 
-        # LEFT PANEL TOP: Firmware Information Header (Matches Logs Header perfectly)
         info_header_frame = ttk.Frame(left_panel)
         info_header_frame.pack(fill=tk.X, pady=(0, 5))
         ttk.Label(info_header_frame, text="Firmware Information", style='Header.TLabel').pack(side=tk.LEFT)
 
-        # Firmware Information Box (Frame with solid border to eliminate LabelFrame title margin and match Logs box starting height perfectly)
-        self.single_banner_frame = ttk.Frame(left_panel, padding=8, relief=tk.SOLID, borderwidth=1)
-        self.single_banner_frame.pack(fill=tk.X, pady=(0, 15))
+        self.s_archive_lbl, self.s_model_lbl, self.s_dest_lbl, self.s_type_lbl = self._create_banner_box(
+            left_panel, lambda: self.single_session_data.get('types', {})
+        )
 
-        self.s_archive_lbl = ttk.Label(self.single_banner_frame, text="Source Archive: N/A", style='Banner.TLabel')
-        self.s_archive_lbl.grid(row=0, column=0, sticky=tk.W, pady=1)
-
-        self.s_model_lbl = ttk.Label(self.single_banner_frame, text="Model Name: N/A", style='Banner.TLabel')
-        self.s_model_lbl.grid(row=1, column=0, sticky=tk.W, pady=1)
-
-        self.s_dest_lbl = ttk.Label(self.single_banner_frame, text="Storage Destination: N/A", style='Banner.TLabel')
-        self.s_dest_lbl.grid(row=2, column=0, sticky=tk.W, pady=1)
-
-        self.s_type_lbl = ttk.Label(self.single_banner_frame, text="File Type(s): N/A", style='Banner.TLabel', foreground='#2980B9')
-        self.s_type_lbl.grid(row=3, column=0, sticky=tk.W, pady=1)
-
-        self.s_type_lbl.bind("<Enter>", lambda e: self._show_tooltip(e, self.single_session_data['types']))
-        self.s_type_lbl.bind("<Leave>", self._hide_tooltip)
-
-        # LEFT PANEL BOTTOM: Dashboard (Borderless Frame)
-        tree_frame = ttk.Frame(left_panel)
-        tree_frame.pack(fill=tk.BOTH, expand=True)
-
-        tree_btn_frame = ttk.Frame(tree_frame)
-        tree_btn_frame.pack(fill=tk.X, pady=(0, 5))
-        ttk.Label(tree_btn_frame, text="Dashboard", style='Header.TLabel').pack(side=tk.LEFT)
-        ttk.Button(tree_btn_frame, text="Clear", style='Clear.TButton', command=lambda: self._clear_tree(self.single_tree, self._log_single)).pack(side=tk.RIGHT)
-
-        tree_scroll_y = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL)
-        tree_scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
-
-        self.single_tree = ttk.Treeview(tree_frame, columns=("module", "status"), show="headings", yscrollcommand=tree_scroll_y.set)
-        tree_scroll_y.config(command=self.single_tree.yview)
-
-        self._configure_tree_columns(self.single_tree)
-        self.single_tree.pack(fill=tk.BOTH, expand=True)
-
-        # RIGHT PANEL TOP: Logs (Borderless Frame, matches starting height of Firmware Info Header perfectly)
-        log_frame = ttk.Frame(right_panel)
-        log_frame.pack(fill=tk.BOTH, expand=True)
-
-        log_btn_frame = ttk.Frame(log_frame)
-        log_btn_frame.pack(fill=tk.X, expand=False, pady=(0, 5))
-        ttk.Label(log_btn_frame, text="Logs", style='Header.TLabel').pack(side=tk.LEFT)
-        ttk.Button(log_btn_frame, text="Clear", style='Clear.TButton', command=lambda: self._clear_log(self.single_log_box)).pack(side=tk.RIGHT)
-
-        log_text_container = ttk.Frame(log_frame)
-        log_text_container.pack(fill=tk.BOTH, expand=True)
-
-        self.single_log_box = tk.Text(log_text_container, wrap=tk.WORD, font=('Consolas', 9), background='#FAFAFA')
-        log_scroll = ttk.Scrollbar(log_text_container, orient=tk.VERTICAL, command=self.single_log_box.yview)
-        self.single_log_box.config(yscrollcommand=log_scroll.set)
-        
-        self.single_log_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        log_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.single_tree = self._create_dashboard_table(left_panel, lambda: self._clear_tree(self.single_tree, self._log_single))
+        self.single_log_box = self._create_logs_panel(right_panel, lambda: self._clear_log(self.single_log_box))
 
     def _build_bulk_screen(self):
-        # Top Header & Go Back & Status Display
-        header_frame = ttk.Frame(self.bulk_frame)
-        header_frame.pack(fill=tk.X, pady=(0, 15))
+        self.bulk_status_var = self._create_header(self.bulk_frame, "Bulk Folder Processing Mode")
+        self.bulk_exec_btn = self._create_input_panel(
+            self.bulk_frame, "Select Folder containing Firmware Archives:", self.bulk_folder_path,
+            "Browse Folder", lambda: self._browse(self.bulk_folder_path, "Select Folder containing Firmware Archives", is_dir=True),
+            "Execute Bulk Pipeline", self._run_bulk_pipeline
+        )
 
-        back_btn = ttk.Button(header_frame, text="< Go Back", command=self._go_back)
-        back_btn.pack(side=tk.LEFT)
-
-        title_label = ttk.Label(header_frame, text="Bulk Folder Processing Mode", style='Header.TLabel')
-        title_label.pack(side=tk.LEFT, padx=(15, 0))
-
-        self.bulk_status_var = tk.StringVar(value="Status: Idle")
-        status_label = ttk.Label(header_frame, textvariable=self.bulk_status_var, font=('Helvetica', 11, 'bold', 'italic'), foreground='#7F8C8D')
-        status_label.pack(side=tk.RIGHT, padx=(0, 10))
-
-        # Input Frame (Label above Entry, Execute aligned beneath)
-        input_frame = ttk.Frame(self.bulk_frame)
-        input_frame.pack(fill=tk.X, pady=(0, 15))
-
-        ttk.Label(input_frame, text="Select Folder containing Firmware Archives:").grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
-        ttk.Entry(input_frame, textvariable=self.bulk_folder_path, width=70).grid(row=1, column=0, sticky=tk.EW, pady=(0, 10), padx=(0, 10))
-        ttk.Button(input_frame, text="Browse Folder", command=self._browse_bulk).grid(row=1, column=1, sticky=tk.W, pady=(0, 10))
-        
-        self.bulk_exec_btn = ttk.Button(input_frame, text="Execute Bulk Pipeline", command=self._run_bulk_pipeline)
-        self.bulk_exec_btn.grid(row=2, column=0, sticky=tk.W, pady=(5, 10))
-
-        input_frame.columnconfigure(0, weight=1)
-
-        # Master Content Split Frame (Left: Inline Pagination Header + Info + Dashboard, Right: Logs)
         main_content = ttk.Frame(self.bulk_frame)
         main_content.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
 
@@ -321,15 +325,13 @@ class FirmwarePipelineApp(tk.Tk):
         right_panel = ttk.Frame(main_content)
         right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(10, 0))
 
-        # LEFT PANEL TOP: Inline Firmware Information & Pagination Header (Matches Logs Header perfectly)
         bulk_info_header = ttk.Frame(left_panel)
         bulk_info_header.pack(fill=tk.X, pady=(0, 5))
-
         ttk.Label(bulk_info_header, text="Firmware Information", style='Header.TLabel').pack(side=tk.LEFT)
 
         self.bulk_next_btn = ttk.Button(bulk_info_header, text="▶", width=3, style='Clear.TButton', command=self._bulk_next)
         self.bulk_next_btn.pack(side=tk.RIGHT, padx=(0, 0))
-        self.bulk_next_btn.bind("<Enter>", lambda e: self._show_text_tooltip(e, "Next Firmware"))
+        self.bulk_next_btn.bind("<Enter>", lambda e: self._show_tooltip(e, "Next Firmware"))
         self.bulk_next_btn.bind("<Leave>", self._hide_tooltip)
 
         self.bulk_combo = ttk.Combobox(bulk_info_header, state="readonly", width=35)
@@ -338,79 +340,29 @@ class FirmwarePipelineApp(tk.Tk):
 
         self.bulk_prev_btn = ttk.Button(bulk_info_header, text="◀", width=3, style='Clear.TButton', command=self._bulk_prev)
         self.bulk_prev_btn.pack(side=tk.RIGHT, padx=(0, 0))
-        self.bulk_prev_btn.bind("<Enter>", lambda e: self._show_text_tooltip(e, "Previous Firmware"))
+        self.bulk_prev_btn.bind("<Enter>", lambda e: self._show_tooltip(e, "Previous Firmware"))
         self.bulk_prev_btn.bind("<Leave>", self._hide_tooltip)
 
-        # Firmware Information Box (Frame with solid border to eliminate LabelFrame title margin and match Logs box starting height perfectly)
-        self.bulk_banner_frame = ttk.Frame(left_panel, padding=8, relief=tk.SOLID, borderwidth=1)
-        self.bulk_banner_frame.pack(fill=tk.X, pady=(0, 15))
+        self.b_archive_lbl, self.b_model_lbl, self.b_dest_lbl, self.b_type_lbl = self._create_banner_box(
+            left_panel, self._get_current_bulk_types
+        )
 
-        self.b_archive_lbl = ttk.Label(self.bulk_banner_frame, text="Source Archive: N/A", style='Banner.TLabel')
-        self.b_archive_lbl.grid(row=0, column=0, sticky=tk.W, pady=1)
+        self.bulk_tree = self._create_dashboard_table(left_panel, lambda: self._clear_tree(self.bulk_tree, self._log_bulk))
+        self.bulk_log_box = self._create_logs_panel(right_panel, lambda: self._clear_log(self.bulk_log_box))
 
-        self.b_model_lbl = ttk.Label(self.bulk_banner_frame, text="Model Name: N/A", style='Banner.TLabel')
-        self.b_model_lbl.grid(row=1, column=0, sticky=tk.W, pady=1)
+    # === EVENT HANDLERS, TOOLTIPS & DIALOGS ===
 
-        self.b_dest_lbl = ttk.Label(self.bulk_banner_frame, text="Storage Destination: N/A", style='Banner.TLabel')
-        self.b_dest_lbl.grid(row=2, column=0, sticky=tk.W, pady=1)
-
-        self.b_type_lbl = ttk.Label(self.bulk_banner_frame, text="File Type(s): N/A", style='Banner.TLabel', foreground='#2980B9')
-        self.b_type_lbl.grid(row=3, column=0, sticky=tk.W, pady=1)
-
-        self.b_type_lbl.bind("<Enter>", lambda e: self._show_tooltip(e, self._get_current_bulk_types()))
-        self.b_type_lbl.bind("<Leave>", self._hide_tooltip)
-
-        # LEFT PANEL BOTTOM: Dashboard (Borderless Frame)
-        tree_frame = ttk.Frame(left_panel)
-        tree_frame.pack(fill=tk.BOTH, expand=True)
-
-        tree_btn_frame = ttk.Frame(tree_frame)
-        tree_btn_frame.pack(fill=tk.X, pady=(0, 5))
-        ttk.Label(tree_btn_frame, text="Dashboard", style='Header.TLabel').pack(side=tk.LEFT)
-        ttk.Button(tree_btn_frame, text="Clear", style='Clear.TButton', command=lambda: self._clear_tree(self.bulk_tree, self._log_bulk)).pack(side=tk.RIGHT)
-
-        tree_scroll_y = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL)
-        tree_scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
-
-        self.bulk_tree = ttk.Treeview(tree_frame, columns=("module", "status"), show="headings", yscrollcommand=tree_scroll_y.set)
-        tree_scroll_y.config(command=self.bulk_tree.yview)
-
-        self._configure_tree_columns(self.bulk_tree)
-        self.bulk_tree.pack(fill=tk.BOTH, expand=True)
-
-        # RIGHT PANEL TOP: Logs (Borderless Frame, matches starting height of Inline Info Header perfectly)
-        log_frame = ttk.Frame(right_panel)
-        log_frame.pack(fill=tk.BOTH, expand=True)
-
-        log_btn_frame = ttk.Frame(log_frame)
-        log_btn_frame.pack(fill=tk.X, expand=False, pady=(0, 5))
-        ttk.Label(log_btn_frame, text="Logs", style='Header.TLabel').pack(side=tk.LEFT)
-        ttk.Button(log_btn_frame, text="Clear", style='Clear.TButton', command=lambda: self._clear_log(self.bulk_log_box)).pack(side=tk.RIGHT)
-
-        log_text_container = ttk.Frame(log_frame)
-        log_text_container.pack(fill=tk.BOTH, expand=True)
-
-        self.bulk_log_box = tk.Text(log_text_container, wrap=tk.WORD, font=('Consolas', 9), background='#FAFAFA')
-        log_scroll = ttk.Scrollbar(log_text_container, orient=tk.VERTICAL, command=self.bulk_log_box.yview)
-        self.bulk_log_box.config(yscrollcommand=log_scroll.set)
-        
-        self.bulk_log_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        log_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-
-    def _configure_tree_columns(self, tree):
-        tree.heading("module", text="Module ID")
-        tree.heading("status", text="Decryption Status")
-
-        tree.column("module", width=180, anchor=tk.CENTER)
-        tree.column("status", width=220, anchor=tk.CENTER)
+    def _log(self, log_box, msg):
+        def _insert():
+            log_box.insert(tk.END, f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}\n")
+            log_box.see(tk.END)
+        self.after(0, _insert)
 
     def _log_single(self, msg):
-        self.single_log_box.insert(tk.END, f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}\n")
-        self.single_log_box.see(tk.END)
+        self._log(self.single_log_box, msg)
 
     def _log_bulk(self, msg):
-        self.bulk_log_box.insert(tk.END, f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}\n")
-        self.bulk_log_box.see(tk.END)
+        self._log(self.bulk_log_box, msg)
 
     def _clear_tree(self, tree, log_func):
         for item in tree.get_children():
@@ -420,71 +372,47 @@ class FirmwarePipelineApp(tk.Tk):
     def _clear_log(self, log_box):
         log_box.delete(1.0, tk.END)
 
-    def _browse_single(self):
+    def _browse(self, path_var, title, is_dir=False):
         try:
-            res = subprocess.run(['zenity', '--file-selection', '--title=Select DJI Firmware Container'], capture_output=True, text=True)
+            cmd = ['zenity', '--file-selection', f'--title={title}']
+            if is_dir:
+                cmd.append('--directory')
+            res = subprocess.run(cmd, capture_output=True, text=True)
             if res.returncode == 0 and res.stdout.strip():
-                self.single_file_path.set(res.stdout.strip())
+                path_var.set(res.stdout.strip())
                 return
         except Exception:
             pass
-        f = filedialog.askopenfilename(title="Select DJI Firmware Container", filetypes=[("Firmware Archives", "*.bin *.tar *.zip"), ("All Files", "*.*")])
-        if f:
-            self.single_file_path.set(f)
 
-    def _browse_bulk(self):
-        try:
-            res = subprocess.run(['zenity', '--file-selection', '--directory', '--title=Select Folder containing Firmware Archives'], capture_output=True, text=True)
-            if res.returncode == 0 and res.stdout.strip():
-                self.bulk_folder_path.set(res.stdout.strip())
-                return
-        except Exception:
-            pass
-        d = filedialog.askdirectory(title="Select Folder containing Firmware Archives")
-        if d:
-            self.bulk_folder_path.set(d)
-
-    def _lock_single_gui(self, lock=True):
-        self.is_processing = lock
-        state = tk.DISABLED if lock else tk.NORMAL
-        self.single_exec_btn.config(state=state)
-        status_text = "Status: Processing" if lock else "Status: Idle"
-        self.single_status_var.set(status_text)
-
-    def _lock_bulk_gui(self, lock=True):
-        self.is_processing = lock
-        state = tk.DISABLED if lock else tk.NORMAL
-        self.bulk_exec_btn.config(state=state)
-        status_text = "Status: Processing" if lock else "Status: Idle"
-        self.bulk_status_var.set(status_text)
-
-    def _parse_firmware_filename(self, filename):
-        base = os.path.basename(filename)
-        model = "UnknownModel"
-        version = "V00.00.0000"
-
-        ver_match = re.search(r'(V\d+\.\d+\.\d+)', base)
-        if ver_match:
-            version = ver_match.group(1)
-
-        model_match = re.search(r'V\d+\.\d+\.\d+_([A-Za-z0-9]+)_dji', base)
-        if model_match:
-            model = model_match.group(1)
+        if is_dir:
+            d = filedialog.askdirectory(title=title)
+            if d:
+                path_var.set(d)
         else:
-            parts = base.split('_')
-            if len(parts) >= 2:
-                model = parts[1]
+            f = filedialog.askopenfilename(title=title, filetypes=[("Firmware Archives", "*.bin *.tar *.zip"), ("All Files", "*.*")])
+            if f:
+                path_var.set(f)
 
-        return model, version
+    def _lock_gui(self, is_bulk, lock=True):
+        self.is_processing = lock
+        state = tk.DISABLED if lock else tk.NORMAL
+        status_text = "Status: Processing" if lock else "Status: Idle"
+        if is_bulk:
+            self.bulk_exec_btn.config(state=state)
+            self.bulk_status_var.set(status_text)
+        else:
+            self.single_exec_btn.config(state=state)
+            self.single_status_var.set(status_text)
 
-    def _show_tooltip(self, event, types_dict):
-        if not types_dict:
+    def _show_tooltip(self, event, content):
+        if not content:
             return
 
-        lines = []
-        for f_type, mod_list in types_dict.items():
-            lines.append(f"{f_type}: {', '.join(mod_list)}")
-        tooltip_text = "\n".join(lines)
+        if isinstance(content, dict):
+            lines = [f"{f_type}: {', '.join(mod_list)}" for f_type, mod_list in content.items()]
+            tooltip_text = "\n".join(lines)
+        else:
+            tooltip_text = str(content)
 
         x = event.widget.winfo_rootx() + 25
         y = event.widget.winfo_rooty() + 25
@@ -494,19 +422,6 @@ class FirmwarePipelineApp(tk.Tk):
         self.tooltip_window.wm_geometry(f"+{x}+{y}")
 
         label = tk.Label(self.tooltip_window, text=tooltip_text, justify=tk.LEFT,
-                         background="#2C3E50", foreground="#ECF0F1", relief=tk.SOLID, borderwidth=1,
-                         font=("Helvetica", 9, "bold"), padx=8, pady=6)
-        label.pack(fill=tk.BOTH, expand=True)
-
-    def _show_text_tooltip(self, event, text):
-        x = event.widget.winfo_rootx() + 25
-        y = event.widget.winfo_rooty() + 25
-
-        self.tooltip_window = tk.Toplevel(event.widget)
-        self.tooltip_window.wm_overrideredirect(True)
-        self.tooltip_window.wm_geometry(f"+{x}+{y}")
-
-        label = tk.Label(self.tooltip_window, text=text, justify=tk.LEFT,
                          background="#2C3E50", foreground="#ECF0F1", relief=tk.SOLID, borderwidth=1,
                          font=("Helvetica", 9, "bold"), padx=8, pady=6)
         label.pack(fill=tk.BOTH, expand=True)
@@ -543,7 +458,7 @@ class FirmwarePipelineApp(tk.Tk):
             self._render_bulk_view(sel)
 
     def _render_bulk_view(self, archive_name):
-        self._update_bulk_banner(archive_name)
+        self._update_bulk_banner_from_session(archive_name)
         for item in self.bulk_tree.get_children():
             self.bulk_tree.delete(item)
         
@@ -551,34 +466,65 @@ class FirmwarePipelineApp(tk.Tk):
             for row in self.bulk_sessions[archive_name]['rows']:
                 self.bulk_tree.insert("", tk.END, values=row)
 
-    def _update_single_banner(self):
-        model = self.single_session_data.get('model', 'N/A')
-        dest = self.single_session_data.get('dest', 'N/A')
-        types = self.single_session_data.get('types', {})
-
-        self.s_archive_lbl.config(text=f"Source Archive: {self.single_session_data.get('archive', 'N/A')}")
-        self.s_model_lbl.config(text=f"Model Name: {model}")
-        self.s_dest_lbl.config(text=f"Storage Destination: {dest}")
-        
+    def _update_banner(self, archive_lbl, model_lbl, dest_lbl, type_lbl, archive_name, model, dest, types):
+        archive_lbl.config(text=f"Source Archive: {archive_name}")
+        model_lbl.config(text=f"Model Name: {model if model else 'N/A'}")
+        dest_lbl.config(text=f"Storage Destination: {dest if dest else 'N/A'}")
         type_str = ", ".join(types.keys()) if types else "N/A"
-        self.s_type_lbl.config(text=f"File Type(s): {type_str}")
+        type_lbl.config(text=f"File Type(s): {type_str}")
 
-    def _update_bulk_banner(self, archive_name):
+    def _update_single_banner_from_session(self):
+        self._update_banner(
+            self.s_archive_lbl, self.s_model_lbl, self.s_dest_lbl, self.s_type_lbl,
+            self.single_session_data.get('archive', 'N/A'),
+            self.single_session_data.get('model', 'N/A'),
+            self.single_session_data.get('dest', 'N/A'),
+            self.single_session_data.get('types', {})
+        )
+
+    def _update_bulk_banner_from_session(self, archive_name):
         if not archive_name or archive_name not in self.bulk_sessions:
-            self.b_archive_lbl.config(text="Source Archive: N/A")
-            self.b_model_lbl.config(text="Model Name: N/A")
-            self.b_dest_lbl.config(text="Storage Destination: N/A")
-            self.b_type_lbl.config(text="File Type(s): N/A")
+            self._update_banner(self.b_archive_lbl, self.b_model_lbl, self.b_dest_lbl, self.b_type_lbl, 'N/A', '', '', {})
             return
-
         sess = self.bulk_sessions[archive_name]
-        self.b_archive_lbl.config(text=f"Source Archive: {archive_name}")
-        self.b_model_lbl.config(text=f"Model Name: {sess.get('model', 'N/A')}")
-        self.b_dest_lbl.config(text=f"Storage Destination: {sess.get('dest', 'N/A')}")
+        self._update_banner(self.b_archive_lbl, self.b_model_lbl, self.b_dest_lbl, self.b_type_lbl, archive_name, sess.get('model', 'N/A'), sess.get('dest', 'N/A'), sess.get('types', {}))
 
-        types = sess.get('types', {})
-        type_str = ", ".join(types.keys()) if types else "N/A"
-        self.b_type_lbl.config(text=f"File Type(s): {type_str}")
+    # === PIPELINE CORE & THREADING ===
+
+    def _parse_firmware_filename(self, filename):
+        base = os.path.basename(filename)
+        model = "UnknownModel"
+        version = "V00.00.0000"
+
+        ver_match = re.search(r'(V\d+\.\d+\.\d+)', base)
+        if ver_match:
+            version = ver_match.group(1)
+
+        model_match = re.search(r'V\d+\.\d+\.\d+_([A-Za-z0-9]+)_dji', base)
+        if model_match:
+            model = model_match.group(1)
+        else:
+            parts = base.split('_')
+            if len(parts) >= 2:
+                model = parts[1]
+
+        return model, version
+
+    def _run_tool_subprocess(self, cmd, log_func, success_msg, err_prefix):
+        try:
+            self.active_subprocess = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            out, err = self.active_subprocess.communicate()
+            ret = self.active_subprocess.returncode
+            if ret != 0:
+                log_func(f"{err_prefix}: {err.strip()}")
+            elif success_msg:
+                log_func(success_msg)
+            return ret, out, err
+        except Exception as e:
+            log_func(f"{err_prefix} exception: {str(e)}")
+            return 1, "", str(e)
+        finally:
+            self.active_subprocess = None
 
     def _run_single_pipeline(self):
         src_path = self.single_file_path.get()
@@ -592,13 +538,13 @@ class FirmwarePipelineApp(tk.Tk):
                 return
             # Clear GUI
             self.single_session_data = {'model': '', 'dest': '', 'types': {}, 'rows': []}
-            self._update_single_banner()
+            self._update_single_banner_from_session()
             for item in self.single_tree.get_children():
                 self.single_tree.delete(item)
             self.single_log_box.delete(1.0, tk.END)
         
         self.cancel_flag = False
-        self._lock_single_gui(True)
+        self._lock_gui(is_bulk=False, lock=True)
         self._log_single(f"Initiating single pipeline for: {os.path.basename(src_path)}")
         threading.Thread(target=self._worker_process_files, args=([src_path], False, None), daemon=True).start()
 
@@ -628,13 +574,13 @@ class FirmwarePipelineApp(tk.Tk):
             self.bulk_current_index = 0
             self.bulk_combo['values'] = []
             self.bulk_combo.set('')
-            self._update_bulk_banner(None)
+            self._update_bulk_banner_from_session(None)
             for item in self.bulk_tree.get_children():
                 self.bulk_tree.delete(item)
             self.bulk_log_box.delete(1.0, tk.END)
 
         self.cancel_flag = False
-        self._lock_bulk_gui(True)
+        self._lock_gui(is_bulk=True, lock=True)
         self._log_bulk(f"Initiating bulk pipeline for {len(files)} archives in: {folder_path}")
         
         run_timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S')
@@ -694,10 +640,7 @@ class FirmwarePipelineApp(tk.Tk):
                 self.after(0, lambda: messagebox.showerror("Pipeline Error", f"An error occurred during pipeline execution:\n{err_msg}"))
         finally:
             if not self.cancel_flag:
-                if is_bulk:
-                    self.after(0, lambda: self._lock_bulk_gui(False))
-                else:
-                    self.after(0, lambda: self._lock_single_gui(False))
+                self.after(0, lambda: self._lock_gui(is_bulk, False))
 
     def _process_single_archive(self, file_path, is_bulk, log_func, bulk_model_data):
         archive_name = os.path.basename(file_path)
@@ -726,17 +669,7 @@ class FirmwarePipelineApp(tk.Tk):
             if os.path.exists(xv4_tool):
                 cmd = [VENV_PYTHON, xv4_tool, "-p", file_path, "-x", "-m", os.path.join(TEMP_WORK_DIR, "m")]
                 log_func(f"Executing dji_xv4_fwcon.py for xV4 extraction...")
-                try:
-                    self.active_subprocess = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                    out, err = self.active_subprocess.communicate()
-                    if self.active_subprocess.returncode != 0:
-                        log_func(f"xV4 extraction warning: {err}")
-                    else:
-                        log_func(f"xV4 extraction completed successfully.")
-                except Exception as e:
-                    log_func(f"xV4 execution exception: {str(e)}")
-                finally:
-                    self.active_subprocess = None
+                self._run_tool_subprocess(cmd, log_func, "xV4 extraction completed successfully.", "xV4 extraction warning")
             else:
                 log_func(f"Error: dji_xv4_fwcon.py tool not found at {xv4_tool}")
 
@@ -799,15 +732,7 @@ class FirmwarePipelineApp(tk.Tk):
                 out_dec_bin = os.path.join(TEMP_WORK_DIR, f"{mod_id}_decrypted.bin")
                 
                 cmd = [VENV_PYTHON, imah_tool, "-i", mod_path, "-m", os.path.join(TEMP_WORK_DIR, f"{mod_id}_decrypted"), "-u"]
-                try:
-                    self.active_subprocess = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                    out, err = self.active_subprocess.communicate()
-                    ret = self.active_subprocess.returncode
-                except Exception as e:
-                    err = str(e)
-                    ret = 1
-                finally:
-                    self.active_subprocess = None
+                ret, out, err = self._run_tool_subprocess(cmd, log_func, None, "IM*H execution warning")
 
                 if self.cancel_flag:
                     return
@@ -880,7 +805,7 @@ class FirmwarePipelineApp(tk.Tk):
         rel_extract_dest = _to_relative_path(target_extract_dir)
         if not is_bulk:
             self.single_session_data = {'archive': archive_name, 'model': model, 'dest': rel_extract_dest, 'types': session_types, 'rows': session_rows}
-            self.after(0, self._update_single_banner)
+            self.after(0, self._update_single_banner_from_session)
             
             # Single mode: Append to model_name.csv
             single_csv_path = os.path.join(SINGLE_LOGS_DIR, f"{model}.csv")
